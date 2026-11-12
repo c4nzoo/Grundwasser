@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="de" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Grundwasser-Check</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script>
+    tailwind.config = { darkMode: 'class' };
+    // Dark Mode je nach Systemeinstellung
+    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+      document.documentElement.classList.add('dark');
+    }
+  </script>
+
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    #map { height: 100%; min-height: 70vh; }
+    .leaflet-container { font-family: inherit; }
+    .fade-in { animation: fadeIn .4s ease both; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  </style>
+</head>
+
+<body class="h-full bg-slate-50 text-slate-800 dark:bg-slate-900 dark:text-slate-100">
+  <div class="flex flex-col lg:flex-row min-h-screen">
+
+    <!-- Sidebar -->
+    <aside class="w-full lg:w-[400px] lg:min-h-screen lg:overflow-y-auto shrink-0 p-5 sm:p-6 space-y-5 bg-white dark:bg-slate-800 shadow-xl z-10">
+
+      <header class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="h-11 w-11 rounded-2xl bg-gradient-to-br from-sky-400 to-blue-600 flex items-center justify-center text-2xl shadow-lg">💧</div>
+          <div>
+            <h1 class="text-xl font-bold leading-tight">Grundwasser-Check</h1>
+            <p class="text-sm text-slate-500 dark:text-slate-400">Richtwert für jede Adresse</p>
+          </div>
+        </div>
+        <button id="themeToggle" title="Design wechseln"
+          class="h-10 w-10 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 transition text-lg">🌓</button>
+      </header>
+
+      <!-- Suche -->
+      <form id="searchForm" class="space-y-3">
+        <label for="address" class="block text-sm font-medium text-slate-600 dark:text-slate-300">Adresse suchen</label>
+        <div class="flex gap-2">
+          <input id="address" type="text" autocomplete="off" placeholder="z. B. Neustraße 1, Dinslaken"
+            class="flex-1 min-w-0 rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-4 py-3 text-base outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 transition" />
+          <button id="searchBtn" type="submit"
+            class="rounded-xl bg-sky-600 hover:bg-sky-700 active:scale-95 text-white font-semibold px-5 py-3 transition shadow">
+            Suchen
+          </button>
+        </div>
+      </form>
+
+      <!-- Status / Fehler -->
+      <div id="status" class="hidden rounded-xl px-4 py-3 text-sm"></div>
+
+      <!-- Info-Box -->
+      <section id="infoBox" class="hidden fade-in rounded-2xl border border-sky-200 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 p-5 space-y-4">
+        <div>
+          <p class="text-xs uppercase tracking-wider font-semibold text-sky-700 dark:text-sky-300">Gefundene Adresse</p>
+          <p id="foundAddress" class="mt-1 text-sm leading-snug"></p>
+        </div>
+
+        <div class="rounded-xl bg-white dark:bg-slate-800 p-4 shadow-sm">
+          <p class="text-xs uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">Ungefährer Grundwasserstand</p>
+          <p class="mt-1 text-2xl font-bold text-sky-700 dark:text-sky-300">
+            ca. <span id="depthRange"></span> m
+          </p>
+          <p class="text-sm text-slate-500 dark:text-slate-400">unter Geländeoberkante</p>
+
+          <!-- Visualisierung -->
+          <div class="mt-4 relative h-28 rounded-lg overflow-hidden bg-gradient-to-b from-amber-100 to-amber-200 dark:from-amber-900/40 dark:to-amber-800/40">
+            <div id="waterLayer" class="absolute left-0 right-0 bottom-0 bg-gradient-to-b from-sky-400/80 to-blue-600/90 transition-all duration-700" style="height:40%"></div>
+            <div class="absolute top-1 left-2 text-[10px] font-semibold text-amber-900/70 dark:text-amber-200/70">Geländeoberkante</div>
+            <div id="waterLabel" class="absolute left-2 text-[10px] font-semibold text-white drop-shadow" style="bottom:6px">Grundwasser</div>
+          </div>
+        </div>
+
+        <dl class="grid grid-cols-2 gap-3 text-sm">
+          <div class="rounded-xl bg-white dark:bg-slate-800 p-3 shadow-sm">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">Koordinaten</dt>
+            <dd id="coords" class="font-medium"></dd>
+          </div>
+          <div class="rounded-xl bg-white dark:bg-slate-800 p-3 shadow-sm">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">Einschätzung</dt>
+            <dd id="rating" class="font-medium"></dd>
+          </div>
+        </dl>
+
+        <p id="hint" class="text-sm leading-snug text-slate-600 dark:text-slate-300"></p>
+      </section>
+
+      <!-- Disclaimer -->
+      <p class="text-xs leading-relaxed text-slate-500 dark:text-slate-400 border-t border-slate-200 dark:border-slate-700 pt-4">
+        ⚠️ <strong>Hinweis:</strong> Dies ist ein <strong>rechnerischer Schätzwert (Demo)</strong> und keine amtliche Messung.
+        Tatsächliche Grundwasserstände schwanken je nach Jahreszeit, Wetter, Bodenaufbau und Nähe zu Gewässern.
+        Für verbindliche Daten bitte die zuständige Behörde bzw. das Landesportal (z. B. ELWAS-WEB NRW) nutzen.
+      </p>
+    </aside>
+
+    <!-- Karte -->
+    <main class="flex-1 relative h-[70vh] lg:h-screen">
+      <div id="map" class="absolute inset-0"></div>
+    </main>
+  </div>
+
+  <script>
+    // ---------- Karte ----------
+    const map = L.map('map', { zoomControl: true }).setView([51.3, 7.6], 7); // NRW / Deutschland
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende'
+    }).addTo(map);
+
+    let marker = null;
+    let areaCircle = null;
+
+    // ---------- Elemente ----------
+    const form = document.getElementById('searchForm');
+    const input = document.getElementById('address');
+    const btn = document.getElementById('searchBtn');
+    const statusBox = document.getElementById('status');
+    const infoBox = document.getElementById('infoBox');
+
+    // ---------- Theme Toggle ----------
+    document.getElementById('themeToggle').addEventListener('click', () => {
+      document.documentElement.classList.toggle('dark');
+    });
+
+    // ---------- Hilfsfunktionen ----------
+    function showStatus(msg, type = 'info') {
+      const styles = {
+        info:  'bg-sky-50 text-sky-800 dark:bg-sky-950/40 dark:text-sky-200',
+        error: 'bg-red-50 text-red-800 dark:bg-red-950/40 dark:text-red-200'
+      };
+      statusBox.className = 'rounded-xl px-4 py-3 text-sm ' + styles[type];
+      statusBox.textContent = msg;
+    }
+    function hideStatus() { statusBox.className = 'hidden'; }
+
+    // Deterministische Pseudo-Zufallszahl aus Koordinaten (0..1)
+    function seeded(lat, lon, salt = 0) {
+      const x = Math.sin(lat * 12.9898 + lon * 78.233 + salt * 37.719) * 43758.5453;
+      return x - Math.floor(x);
+    }
+
+    // Plausibler Schätzwert (Demo): gleiche Adresse -> gleicher Wert
+    function estimateGroundwater(lat, lon) {
+      // Grundtendenz: Norddeutsche Tiefebene / Niederrhein flacher, Süden/Mittelgebirge tiefer
+      let base = 1.5 + Math.max(0, (52 - lat)) * 0.9;     // südlicher = tiefer
+      base += seeded(lat, lon, 1) * 2.2;                   // lokale Variation
+      // Rhein-/Niederrheinregion tendenziell flacher
+      if (lon > 6.3 && lon < 7.6 && lat > 51.1 && lat < 51.8) base -= 0.6;
+      base = Math.max(0.6, Math.min(base, 9.5));
+
+      const spread = 0.3 + seeded(lat, lon, 2) * 0.5;      // Spannweite 0,3 - 0,8 m
+      const min = Math.max(0.3, base - spread / 2);
+      const max = base + spread / 2;
+      return { min, max, mid: (min + max) / 2 };
+    }
+
+    function fmt(n) { return n.toFixed(1).replace('.', ','); }
+
+    function describe(mid) {
+      if (mid < 2)  return { label: 'Sehr flach', hint: 'Das Grundwasser liegt vermutlich sehr oberflächennah. Bei Bauvorhaben ist mit Staunässe bzw. Wasserandrang zu rechnen.' };
+      if (mid < 4)  return { label: 'Flach',      hint: 'Ein flacher Grundwasserstand – für einfache Flachbrunnen grundsätzlich interessant, bei Kellern sollte auf Abdichtung geachtet werden.' };
+      if (mid < 7)  return { label: 'Mittel',     hint: 'Mittlerer Flurabstand. Für Brunnen sind meist tiefere Bohrungen nötig; Schwankungen im Jahresverlauf einplanen.' };
+      return           { label: 'Tief',       hint: 'Das Grundwasser liegt vermutlich tief. Für Brunnenbohrungen ist mit deutlich höherem Aufwand zu rechnen.' };
+    }
+
+    // ---------- Suche ----------
+    async function searchAddress(query) {
+      const url = 'https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&accept-language=de&q='
+                  + encodeURIComponent(query);
+      const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      if (!res.ok) throw new Error('Adresssuche nicht erreichbar (' + res.status + ').');
+      return res.json();
+    }
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (!q) { showStatus('Bitte gib eine Adresse ein.', 'error'); return; }
+
+      btn.disabled = true;
+      btn.textContent = '…';
+      showStatus('Suche läuft …');
+      infoBox.classList.add('hidden');
+
+      try {
+        const results = await searchAddress(q);
+        if (!results.length) {
+          showStatus('Keine Adresse gefunden. Versuche es mit Straße, Hausnummer und Ort.', 'error');
+          return;
+        }
+
+        const r = results[0];
+        const lat = parseFloat(r.lat);
+        const lon = parseFloat(r.lon);
+        const est = estimateGroundwater(lat, lon);
+        const info = describe(est.mid);
+
+        // Karte + Marker
+        map.flyTo([lat, lon], 16, { duration: 1.2 });
+        if (marker) map.removeLayer(marker);
+        if (areaCircle) map.removeLayer(areaCircle);
+        marker = L.marker([lat, lon]).addTo(map)
+          .bindPopup(`<strong>Ca. ${fmt(est.min)} – ${fmt(est.max)} m</strong><br>unter Geländeoberkante`)
+          .openPopup();
+        areaCircle = L.circle([lat, lon], {
+          radius: 150, color: '#0284c7', weight: 2, fillColor: '#38bdf8', fillOpacity: 0.2
+        }).addTo(map);
+
+        // Info-Box füllen
+        document.getElementById('foundAddress').textContent = r.display_name;
+        document.getElementById('depthRange').textContent = `${fmt(est.min)} bis ${fmt(est.max)}`;
+        document.getElementById('coords').textContent = `${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+        document.getElementById('rating').textContent = info.label;
+        document.getElementById('hint').textContent = info.hint;
+
+        // Visualisierung: je flacher, desto höher der Wasserspiegel
+        const waterPct = Math.max(12, Math.min(88, 100 - (est.mid / 10) * 100));
+        document.getElementById('waterLayer').style.height = waterPct + '%';
+
+        infoBox.classList.remove('hidden');
+        infoBox.classList.remove('fade-in'); void infoBox.offsetWidth; infoBox.classList.add('fade-in');
+        hideStatus();
+
+        // Auf Mobilgeräten zur Karte scrollen
+        if (window.innerWidth < 1024) {
+          document.querySelector('main').scrollIntoView({ behavior: 'smooth' });
+        }
+      } catch (err) {
+        showStatus(err.message || 'Es ist ein Fehler aufgetreten.', 'error');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Suchen';
+      }
+    });
+
+    // Klick auf Karte: ebenfalls Schätzwert anzeigen
+    map.on('click', (e) => {
+      const { lat, lng } = e.latlng;
+      const est = estimateGroundwater(lat, lng);
+      L.popup().setLatLng(e.latlng)
+        .setContent(`<strong>Ca. ${fmt(est.min)} – ${fmt(est.max)} m</strong><br>unter Geländeoberkante<br><span style="font-size:11px;color:#64748b">Schätzwert (Demo)</span>`)
+        .openOn(map);
+    });
+  </script>
+</body>
+</html>
